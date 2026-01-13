@@ -8,7 +8,6 @@
 e:\sync\courses\AU3318\finalProj\
 │
 ├── dsp_assignment_solution.py  # [核心代码] 完整的解决方案脚本（数据处理、特征提取、分类、绘图）
-├── dsp_process.py             # 辅助脚本，用于早期的数据探索和频谱分析验证
 ├── visualize.py               # 辅助脚本，用于简单的波形可视化和敲击次数估算
 ├── report/
 │   └── report.tex             # 实验报告 LaTeX 源码
