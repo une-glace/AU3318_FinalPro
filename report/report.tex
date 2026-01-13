@@ -1,0 +1,174 @@
+\documentclass{article}
+\usepackage{ctex}     % 导入 ctex 宏包
+\usepackage{amsmath}  % 提供数学公式排版功能
+\usepackage{amssymb}  % 提供额外的数学符号
+\usepackage{graphicx} % 插入图片
+\usepackage{float}    % 图表位置
+\usepackage{geometry} % 控制页面布局
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{xcolor}
+\geometry{a4paper, margin=1in} % 设置纸张大小和边距
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\color{blue},
+    commentstyle=\color{gray},
+    stringstyle=\color{red},
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    stepnumber=1,
+    numbersep=5pt,
+    backgroundcolor=\color{white},
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    frame=single,
+    tabsize=2,
+    captionpos=b,
+    breaklines=true,
+    breakatwhitespace=false,
+    escapeinside={\%*}{*)}
+}
+
+% 设置中文字体为楷体
+\setCJKmainfont{KaiTi} % 设置主字体为楷体
+\setCJKsansfont{KaiTi} % 设置无衬线字体为楷体
+\setCJKmonofont{KaiTi} % 设置等宽字体为楷体
+
+\title{AU3318 大作业报告}
+\author{李青雅 523030910004 电院2301}
+\date{\today} % 自动插入今天的日期
+
+\begin{document}
+
+\maketitle
+\newpage
+\tableofcontents % 生成目录
+\newpage
+
+\section{实验目的}
+本实验旨在利用数字信号处理技术，对发电机定子槽楔的敲击振动信号进行分析。通过对不同紧固压力下（400N - 4000N）采集的声学/振动信号进行时域切分、频域变换及特征提取，构建分类模型以识别槽楔的松紧状态，并探究松紧度与信号频率特征之间的定量关系。
+
+\section{数据预处理与时域分析}
+\subsection{数据读取}
+实验数据为一系列 TXT 文本文件，记录了不同压力下敲击测试的连续采样点。利用 Python 的 \texttt{numpy} 库读取数据，将文本序列转换为内存中的数值数组。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{../waveform_preview.png}
+    \caption{原始采集数据的时域波形示例（acquisitionData-400.txt）}
+    \label{fig:raw_waveform}
+\end{figure}
+
+\subsection{时域信号切分}
+原始数据包含连续多次敲击的信号。为了进行特征分析，首先需要将单次敲击信号从长录音中分离出来。
+本实验采用\textbf{动态阈值法}进行切分：
+\begin{enumerate}
+    \item 移除直流分量：$x[n] = x[n] - \text{mean}(x)$
+    \item 设定阈值：取信号最大幅值的 15\% 作为触发阈值。
+    \item 峰值检测与截取：当信号幅度超过阈值且距离上一次检测超过一定间隔（2000点）时，判定为一次新的敲击。
+\end{enumerate}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{../waveform_with_peaks.png}
+    \caption{时域波形及敲击事件检测结果（红叉标记为检测到的敲击点）}
+    \label{fig:waveform}
+\end{figure}
+
+\subsection{时域信号长度的选择}
+在切分过程中，我们选定每个样本的长度为 \textbf{4096} 个采样点（约 40ms，假设采样率 100kHz）。
+
+\textbf{选定合适的时域信号长度的原因}
+\begin{itemize}
+    \item \textbf{频率分辨率}：FFT 的频率分辨率 $\Delta f = F_s / N$。选择 4096 点（$2^{12}$）不仅利用了 FFT 算法的高效性，更重要的是提供了足够高的频率分辨率，以便区分不同松紧度下的细微频率差异。
+    \item \textbf{信噪比控制}：敲击信号是瞬态阻尼振荡。如果截取过短，会丢失信号尾部的有效信息；如果截取过长，则会引入大量的背景静音噪声，降低信噪比。4096 点恰好能完整覆盖一次敲击的起振与衰减过程。
+    \item \textbf{样本一致性}：机器学习分类器要求输入特征维度一致，因此必须统一所有样本的长度。
+\end{itemize}
+
+\section{频域分析}
+\subsection{频域变换}
+对截取出的 4096 点时域信号 $x[n]$ 进行快速傅里叶变换（FFT），将其转换为频域信号 $X[k]$。
+在变换前，先对信号加 \textbf{Hanning 窗}，以减小频谱泄漏（Spectral Leakage）。
+Hanning 窗的数学表达式为：
+\begin{equation}
+w(n) = 0.5 \left( 1 - \cos \left( \frac{2\pi n}{N-1} \right) \right), \quad 0 \le n \le N-1
+\end{equation}
+其中，$N$ 为窗口长度（本实验中 $N=4096$）。
+
+\textbf{处理时域和频域关系的区别：}
+\begin{itemize}
+    \item \textbf{步骤3（时域定长）}是\textbf{预处理}阶段，目的是准备合格的“原材料”。它决定了后续分析的时间窗口和基本分辨率。
+    \item \textbf{步骤4（频域变换）}是\textbf{特征空间转换}阶段，目的是将信号从“时间-幅度”视角切换到“频率-能量”视角。
+    \item \textbf{关系}：时域是信号的真实物理表现（随时间变化），频域是信号的数学统计特性（包含哪些频率成分）。对于槽楔松紧度检测，时域波形受敲击力度影响较大（力大则幅值大），不稳定；而频域特征主要由物体固有的物理属性（刚度、质量）决定，更能反映“松紧”这一本质特征。
+\end{itemize}
+
+\subsection{频谱特征对比}
+通过对比不同压力下的频谱图（图 \ref{fig:spectrum}），可以发现：
+\begin{itemize}
+    \item \textbf{低压力（松）}：主峰频率较低，且频谱分布较散乱，包含较多低频杂波。
+    \item \textbf{高压力（紧）}：主峰频率明显向高频移动，且能量更加集中。
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{../spectrum_comparison.png}
+    \caption{不同压力下的归一化频谱对比}
+    \label{fig:spectrum}
+\end{figure}
+
+\section{特征提取与分类}
+为了量化信号特征，本实验提取了多域特征进行融合分析：
+\begin{itemize}
+    \item \textbf{频域特征}：主频（Peak Frequency）、频谱质心（Spectral Centroid）、带宽（Bandwidth）、谱偏度（Spectral Skewness）、能量（Energy）。
+    \item \textbf{时域特征}：峰度（Kurtosis，反映波形尖锐度）、偏度（Skewness，反映波形对称性）、均方根值（RMS，反映有效强度）。
+\end{itemize}
+
+\subsection{分类模型与精度}
+构建了包含 382 个样本的数据集，并划分 70\% 训练集和 30\% 测试集。
+使用 \textbf{随机森林（Random Forest）} 分类器进行训练，最终在测试集上达到了 \textbf{86.96\%} 的准确率。
+
+\begin{table}[H]
+\centering
+\begin{tabular}{|c|c|c|c|}
+\hline
+\textbf{压力类别} & \textbf{Precision} & \textbf{Recall} & \textbf{F1-Score} \\ \hline
+400 (很松) & 1.00 & 1.00 & 1.00 \\ \hline
+1200 (较松) & 1.00 & 1.00 & 1.00 \\ \hline
+2000 (中等) & 0.81 & 0.93 & 0.87 \\ \hline
+4000 (很紧) & 0.67 & 0.67 & 0.67 \\ \hline
+\end{tabular}
+\caption{部分压力类别的分类性能表}
+\end{table}
+
+实验结果表明，模型对低压力（松动）状态的识别非常精准（F1=1.00），能有效检出故障；而在高压力区，由于物理特性趋于饱和，区分难度较大，但在去除低频干扰后，整体准确率有了显著提升。
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.8\textwidth]{../confusion_matrix.png}
+    \caption{分类结果混淆矩阵}
+    \label{fig:confusion}
+\end{figure}
+
+\section{松紧度与频率的关系}
+
+通过统计所有样本的平均特征，绘制了压力值与频率特征的关系曲线（图 \ref{fig:trend}）。
+
+\textbf{特别说明}：在初步分析中，我们发现高压力（4000N）样本在 1000Hz 附近存在异常强的低频分量（可能是台架共振或刚体模态），这掩盖了反映接触刚度的高频特征，导致频率与压力关系出现反常。因此，在特征提取时我们\textbf{滤除了 1500Hz 以下的低频成分}。
+
+修正后的结果显示：
+\begin{itemize}
+    \item \textbf{趋势}：随着压力值（松紧度）的增加，信号的特征频率（尤其是频谱质心 Spectral Centroid）呈现非常显著的\textbf{上升趋势}（从约 6000Hz 上升至 9500Hz）。
+    \item \textbf{主频的波动}：图中蓝线（主频 Peak Frequency）在某些压力点（如 1600N）出现大幅波动。这是由于槽楔结构存在多个相近的固有频率（多模态），当敲击位置或力度微小变化时，最大峰值可能在两个模态之间跳变（Mode Jumping）。相比之下，\textbf{频谱质心（Spectral Centroid）}作为频谱能量的重心，综合了所有频率成分，因此表现出极好的稳定性和单调性。
+    \item \textbf{物理机制}：根据振动理论，结构的固有频率 $f \propto \sqrt{k/m}$。随着槽楔压紧力增大，接触刚度 $k$ 增大，导致固有频率升高。
+    \item \textbf{结论}：频率特征（特别是质心频率）与松紧度存在显著的正相关性，验证了利用声学/振动信号检测槽楔松紧度的可行性。
+\end{itemize}
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=1\textwidth]{../final_result_trend.png}
+    \caption{松紧度（压力）与频率特征的变化关系}
+    \label{fig:trend}
+\end{figure}
+
+\end{document}

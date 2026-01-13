@@ -8,6 +8,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score, confusion_matrix
 import seaborn as sns
+from scipy.stats import skew, kurtosis
 
 # ================= 配置参数 =================
 DATA_DIR = '槽楔模型测试数据'
@@ -53,14 +54,20 @@ def compute_fft(segment, fs=SAMPLE_RATE):
     
     return fft_freq, fft_val
 
-def extract_features(freqs, magnitude):
+def extract_features(freqs, magnitude, segment_time_domain):
     """
-    提取多个特征用于分类
+    提取多个特征用于分类 (增强版)
+    输入:
+      freqs: 频率轴
+      magnitude: 幅值谱
+      segment_time_domain: 时域信号片段
     """
-    # 1. 忽略低频 (0-100Hz)
-    valid_mask = freqs > 100
+    # ================= 频域特征 =================
+    # 1. 忽略低频干扰 (例如 <1500Hz 的结构模态/台架共振)
+    # 观察发现高压下 1000Hz 左右有强干扰峰，掩盖了真实的高频特征
+    valid_mask = freqs > 1500
     if np.sum(valid_mask) == 0:
-        return [0, 0, 0, 0]
+        return [0] * 8 # 返回8个0
         
     f = freqs[valid_mask]
     m = magnitude[valid_mask]
@@ -75,13 +82,28 @@ def extract_features(freqs, magnitude):
     # 特征3: 带宽 (Spectral Bandwidth)
     bandwidth = np.sqrt(np.sum(((f - centroid)**2) * m) / (np.sum(m) + 1e-6))
     
-    # 特征4: 能量 (Energy) - 简单的幅度平方和
+    # 特征4: 能量 (Energy)
     energy = np.sum(m**2)
+
+    # 特征5: 偏度 (Spectral Skewness) - 描述频谱分布的对称性
+    # 简单的加权计算
+    spec_skewness = np.sum(((f - centroid)**3) * m) / (np.sum(m) * bandwidth**3 + 1e-6)
     
-    return [peak_freq, centroid, bandwidth, energy]
+    # ================= 时域特征 =================
+    # 特征6: 峰度 (Kurtosis) - 描述时域波形的尖锐程度
+    # 敲击声通常非常尖锐，峰度很高
+    time_kurtosis = kurtosis(segment_time_domain)
+    
+    # 特征7: 偏度 (Skewness) - 描述时域波形的对称性
+    time_skewness = skew(segment_time_domain)
+    
+    # 特征8: 均方根值 (RMS) - 描述时域信号的有效强度
+    rms = np.sqrt(np.mean(segment_time_domain**2))
+    
+    return [peak_freq, centroid, bandwidth, energy, spec_skewness, time_kurtosis, time_skewness, rms]
 
 def main():
-    print("=== 开始处理 DSP 大作业任务 ===")
+    print("=== 开始处理 DSP 大作业任务 (增强特征版) ===")
     
     files = glob.glob(os.path.join(DATA_DIR, 'acquisitionData-*.txt'))
     
@@ -91,6 +113,10 @@ def main():
     # 用于统计每个压力下的平均特征
     pressure_stats = {}
     
+    # 用于绘制频谱对比图的存储 (Pressure -> (freqs, avg_magnitude))
+    spectra_for_plot = {}
+    target_pressures_for_plot = [400, 2000, 4000]
+
     for file_path in files:
         filename = os.path.basename(file_path)
         pressure = parse_pressure(filename)
@@ -103,9 +129,23 @@ def main():
             segments = segment_signal(raw_data)
             print(f"  -> 提取到 {len(segments)} 个样本")
             
+            # 如果是目标压力，初始化平均谱计算
+            if pressure in target_pressures_for_plot:
+                accum_mag = np.zeros(WINDOW_SIZE//2)
+                count_seg = 0
+                freqs_ref = None
+
             for seg in segments:
                 freqs, mag = compute_fft(seg)
-                feats = extract_features(freqs, mag)
+                
+                # 累加频谱用于绘图
+                if pressure in target_pressures_for_plot:
+                    accum_mag += mag
+                    count_seg += 1
+                    if freqs_ref is None: freqs_ref = freqs
+
+                # 传入时域信号 segment 用于计算时域特征
+                feats = extract_features(freqs, mag, seg)
                 
                 X.append(feats)
                 y.append(pressure)
@@ -114,6 +154,11 @@ def main():
                 if pressure not in pressure_stats:
                     pressure_stats[pressure] = []
                 pressure_stats[pressure].append(feats)
+            
+            # 存储该压力的平均谱
+            if pressure in target_pressures_for_plot and count_seg > 0:
+                avg_mag = accum_mag / count_seg
+                spectra_for_plot[pressure] = (freqs_ref, avg_mag)
                 
         except Exception as e:
             print(f"  -> 错误: {e}")
@@ -122,6 +167,7 @@ def main():
     y = np.array(y)
     
     print(f"\n数据集构建完成: 总样本数 {len(X)}, 特征数 {X.shape[1]}")
+    print("特征列表: [Peak Freq, Centroid, Bandwidth, Energy, Spec Skew, Time Kurt, Time Skew, RMS]")
     
     # ================= 6. 分类与精度计算 =================
     print("\n--- 开始分类训练 (使用 KNN 和 随机森林) ---")
@@ -166,8 +212,18 @@ def main():
         print(f"{p:<15} | {avg_feats[0]:<15.2f} | {avg_feats[1]:<15.2f}")
         
     plt.figure(figsize=(10, 6))
-    plt.plot(sorted_pressures, avg_peak_freqs, 'b-o', label='Peak Frequency')
-    plt.plot(sorted_pressures, avg_centroids, 'r-s', label='Spectral Centroid')
+    
+    # 绘制主频 (Peak Frequency) - 稍微淡一点，因为波动大
+    plt.plot(sorted_pressures, avg_peak_freqs, 'o--', color='tab:blue', alpha=0.5, label='Peak Freq (Unstable)')
+    
+    # 绘制质心 (Spectral Centroid) - 加粗，作为主要结论
+    plt.plot(sorted_pressures, avg_centroids, 's-', color='tab:orange', linewidth=2, label='Spectral Centroid (Stable)')
+    
+    # 添加线性拟合线 (针对质心)
+    z = np.polyfit(sorted_pressures, avg_centroids, 1)
+    p = np.poly1d(z)
+    plt.plot(sorted_pressures, p(sorted_pressures), 'r:', linewidth=1.5, label=f'Trend Line (Centroid)')
+
     plt.title('Relationship between Tightness (Pressure) and Frequency Features')
     plt.xlabel('Pressure (Tightness)')
     plt.ylabel('Frequency (Hz)')
@@ -176,6 +232,23 @@ def main():
     plt.savefig('final_result_trend.png')
     print("\n趋势图已保存至: final_result_trend.png")
     
+    # 绘制频谱对比图
+    if spectra_for_plot:
+        plt.figure(figsize=(12, 6))
+        for p in sorted(spectra_for_plot.keys()):
+            f, mag = spectra_for_plot[p]
+            # Normalize by max value for comparison
+            plt.plot(f, mag / np.max(mag), label=f'Pressure {p}')
+        
+        plt.title("Frequency Spectrum Comparison (Normalized)")
+        plt.xlabel("Frequency (Hz)")
+        plt.ylabel("Normalized Amplitude")
+        plt.xlim(0, 20000) # 只显示前20kHz
+        plt.legend()
+        plt.grid(True)
+        plt.savefig('spectrum_comparison.png')
+        print("频谱对比图已保存至: spectrum_comparison.png")
+
     # 混淆矩阵
     plt.figure(figsize=(10, 8))
     cm = confusion_matrix(y_test, y_pred_rf)

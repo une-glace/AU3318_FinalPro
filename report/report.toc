@@ -1,0 +1,11 @@
+\contentsline {section}{\numberline {1}实验目的}{3}{}%
+\contentsline {section}{\numberline {2}数据预处理与时域分析}{3}{}%
+\contentsline {subsection}{\numberline {2.1}数据读取}{3}{}%
+\contentsline {subsection}{\numberline {2.2}时域信号切分}{3}{}%
+\contentsline {subsection}{\numberline {2.3}时域信号长度的选择}{4}{}%
+\contentsline {section}{\numberline {3}频域分析}{4}{}%
+\contentsline {subsection}{\numberline {3.1}频域变换}{4}{}%
+\contentsline {subsection}{\numberline {3.2}频谱特征对比}{5}{}%
+\contentsline {section}{\numberline {4}特征提取与分类}{5}{}%
+\contentsline {subsection}{\numberline {4.1}分类模型与精度}{5}{}%
+\contentsline {section}{\numberline {5}松紧度与频率的关系}{6}{}%
